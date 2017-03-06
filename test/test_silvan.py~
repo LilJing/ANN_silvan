@@ -1,0 +1,90 @@
+import chainer
+import numpy as np
+import scipy.io
+import sys
+sys.path.append('/vol/ccnlab-scratch1/silqua/ANN')
+import datasets
+from chainer.functions.activation import sigmoid
+import models.custom_links as CL
+import supervised_learning
+from analysis import Analysis
+from models import neural_networks as models
+from models.utilities import Regressor
+
+
+mat = scipy.io.loadmat('/home/squax/SN_project/data_jeroen.mat')
+_in = np.transpose(mat['input']).astype('float32')
+_out = np.transpose(mat['output']).astype('float32')
+
+nin = 22*22 # number of pixels
+nout = 20 # number of electrodes
+
+### flat input
+#_in = np.reshape(_in,[900,18,nin])
+
+patIndRand=np.random.permutation(900) #random shuffle indices of patterns
+noPatTrain=900*9/10 # number of patterns used for training 90%
+patIndTrain=patIndRand[:noPatTrain] # indices of training patterns
+patIndTest=patIndRand[noPatTrain:] # indices of test patterns
+
+img_train = _in[patIndTrain]
+neu_train = _out[patIndTrain]
+img_val = _in[patIndTest]
+neu_val = _out[patIndTest]
+
+# get data
+training_data = datasets.DynamicData(img_train, neu_train)
+validation_data = datasets.DynamicData(img_val, neu_val)
+
+# define model
+model = Regressor(models.RecurrentNeuralNetwork(nin, 50, nout, link=CL.Elman))
+
+# overload activation function of Elman layer
+model.predictor[0][0].actfun = sigmoid.sigmoid
+
+# Set up an optimizer
+#optimizer = chainer.optimizers.Adam()
+optimizer = chainer.optimizers.SGD(lr=0.05)
+
+optimizer.setup(model)
+#optimizer.add_hook(chainer.optimizer.GradientClipping(5))
+#optimizer.add_hook(chainer.optimizer.WeightDecay(1e-5))
+
+ann = supervised_learning.RecurrentLearner(optimizer, cutoff=18)
+
+# Finally we run the optimization
+ann.optimize(training_data, validation_data=validation_data, epochs=100)
+
+# plot loss and throughput
+ann.report('results/tmp')
+
+# create analysis object
+ana = Analysis(ann.model, fname='results/tmp')
+
+###
+ann.model.predictor.reset_state()
+
+ann.model.predictor.test = True
+ann.model.predictor.train = False
+Y = []
+R2=[]
+ntime=18
+import scipy.stats as sst
+from chainer import Variable
+for step in xrange(validation_data.X.shape[0]):
+    x = Variable(np.asarray(validation_data.X[step][None]), False)
+    Y.append(ann.model.predictor(x).data)
+    if (step+1) % ntime == 0:
+        ann.model.predictor.reset_state()
+
+x2=np.zeros(len(validation_data.X)/ntime)
+Y = np.squeeze(np.asarray(Y))
+for n in range(0, 20):
+    for pat in xrange(len(validation_data.X)/ntime):
+        x2[pat], y2= sst.pearsonr(Y[(18*pat):(18*pat+18),n].T, validation_data.T[(18*pat):(18*pat+18), n].T)
+    R2.append(np.mean(x2))
+
+print(R2)
+###
+# analyse data
+ana.regression_analysis(validation_data.X, validation_data.T)

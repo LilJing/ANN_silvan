@@ -1,0 +1,2 @@
+#!/bin/bash
+ipython /home/squax/python_scripts/Cifar/test_cifar.py $ntime $nhid $noise
